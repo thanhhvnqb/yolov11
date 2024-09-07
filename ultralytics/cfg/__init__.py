@@ -603,9 +603,9 @@ def entrypoint(debug=""):
 
         model = RTDETR(model)  # no task argument
     elif "cyolo" in stem:
-        from ultralytics import CYOLO
+        from ultralytics import YOLOv10
 
-        model = CYOLO(model)
+        model = YOLOv10(model)
     elif "fastsam" in stem:
         from ultralytics import FastSAM
 
