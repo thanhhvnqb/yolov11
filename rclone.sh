@@ -1,0 +1,1 @@
+rclone copy -v /home/islab/DATA/yolov11 gdrive:Working/yolov11-pc/ --drive-chunk-size=256M --transfers=40 --checkers=40 --tpslimit=9 --fast-list --max-backlog 200000 --exclude=/home/islab/DATA/yolov11/.git/
