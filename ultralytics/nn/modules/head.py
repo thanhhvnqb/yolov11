@@ -533,3 +533,10 @@ class v10Detect(Detect):
         for a, b, s in zip(m.one2one_cv2, m.one2one_cv3, m.stride):  # from
             a[-1].bias.data[:] = 1.0  # box
             b[-1].bias.data[: m.nc] = math.log(5 / m.nc / (640 / s) ** 2)  # cls (.01 objects, 80 classes, 640 img)
+
+class v11Detect(v10Detect):
+
+    def __init__(self, nc=80, ch=()):
+        super().__init__(nc, ch)
+        c3 = max(ch[0], min(self.nc, 100))  # channels
+        self.cv3 = nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, self.nc, 1)) for x in ch)

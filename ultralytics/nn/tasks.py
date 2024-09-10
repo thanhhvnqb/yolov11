@@ -52,8 +52,13 @@ from ultralytics.nn.modules import (
     C2fCIB,
     PSA,
     SCDown,
+    DWPool,
     RepVGGDW,
-    v10Detect
+    RepRDW,
+    RepCSPRDW,
+    RepNCSPELAN4RDW,
+    v10Detect,
+    v11Detect
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -876,6 +881,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             C2,
             C2f,
             RepNCSPELAN4,
+            RepNCSPELAN4RDW,
             ADown,
             SPPELAN,
             C2fAttn,
@@ -888,6 +894,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             RepC3,
             PSA,
             SCDown,
+            DWPool,
             C2fCIB
         }:
             c1, c2 = ch[f], args[0]
@@ -917,7 +924,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
-        elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn, v10Detect}:
+        elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn, v10Detect, v11Detect}:
             args.append([ch[x] for x in f])
             if m is Segment:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
@@ -1005,7 +1012,7 @@ def guess_model_task(model):
         m = cfg["head"][-1][-2].lower()  # output module name
         if m in {"classify", "classifier", "cls", "fc"}:
             return "classify"
-        if m == "detect" or m == "v10detect":
+        if m == "detect" or m == "v10detect" or m == "v11detect":
             return "detect"
         if m == "segment":
             return "segment"
@@ -1037,7 +1044,7 @@ def guess_model_task(model):
                 return "pose"
             elif isinstance(m, OBB):
                 return "obb"
-            elif isinstance(m, (Detect, WorldDetect, v10Detect)):
+            elif isinstance(m, (Detect, WorldDetect, v10Detect, v11Detect)):
                 return "detect"
 
     # Guess from model filename

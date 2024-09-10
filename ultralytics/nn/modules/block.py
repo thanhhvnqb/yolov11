@@ -38,6 +38,9 @@ __all__ = (
     "CBFuse",
     "CBLinear",
     "Silence",
+    "RepRDW",
+    "RepCSPRDW",
+    "RepNCSPELAN4RDW",
 )
 
 
@@ -825,3 +828,67 @@ class SCDown(nn.Module):
 
     def forward(self, x):
         return self.cv2(self.cv1(x))
+
+class DWPool(nn.Module):
+    # def __init__(self, c1, c2, k, s):
+    #     super().__init__()
+    #     _c = c2 // 2
+    #     self.cv1_1 = Conv(c1, c1, k=k, s=s, g=c1, act=False)
+    #     self.cv1_2 = Conv(c1, _c, 1, 1)
+    #     self.cv2_1 = Conv(c1, c1, 1, 1)
+    #     self.cv2_2 = Conv(c1, c1, k=k, s=s, g=c1, act=False)
+    #     self.cv2_3 = Conv(c1, _c, 1, 1)
+
+    # def forward(self, x):
+    #     return torch.cat((self.cv1_2(self.cv1_1(x)), self.cv2_3(self.cv2_2(self.cv2_1(x)))), 1)
+    
+    def __init__(self, c1, c2, k, s):
+        super().__init__()
+        self.cv1_1 = Conv(c1, c1, k=k, s=s, g=c1, act=False)
+        self.cv2_1 = Conv(c1, c1, 1, 1)
+        self.cv2_2 = Conv(c1, c1, k=k, s=s, g=c1, act=False)
+        self.cv = Conv(2*c1, c2, 1, 1)
+
+    def forward(self, x):
+        return self.cv(torch.cat((self.cv1_1(x), self.cv2_2(self.cv2_1(x))), 1))
+
+class RepDW(RepVGGDW):
+    def __init__(self, ed) -> None:
+        super().__init__(ed)
+        self.act = nn.SiLU()
+
+class RepRDW(CIB):
+    """Standard bottleneck."""
+
+    def __init__(self, c1, c2, shortcut=True, lk=True):
+        """Initializes a bottleneck module with given input/output channels, shortcut option, group, kernels, and
+        expansion.
+        """
+        super().__init__(c1, c2, shortcut, lk)
+        self.cv1 = nn.Sequential(
+            Conv(c1, c2, 1),
+            Conv(c2, c2, 7, g=c2) if not lk else RepDW(c2),
+            Conv(c2, c2, 1),
+        )
+
+
+class RepCSPRDW(RepCSP):
+    """Rep CSP with Residual Depthwise Block with 3 convolutions."""
+
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
+        """Initializes RepCSP layer with given channels, repetitions, shortcut, groups and expansion ratio."""
+        super().__init__(c1, c2, n, shortcut, g, e)
+        c_ = int(c2 * e)  # hidden channels
+        self.m = nn.Sequential(*(RepRDW(c_, c_, shortcut, g) for _ in range(n)))
+
+
+class RepNCSPELAN4RDW(RepNCSPELAN4):
+    """CSP-ELAN with RepCSPRDW."""
+
+    def __init__(self, c1, c2, n=1):
+        """Initializes CSP-ELAN layer with specified channel sizes, repetitions, and convolutions."""
+        c3 = c2 // 2
+        c4 = c3 // 2
+        super().__init__(c1, c2, c3, c4, n)
+        self.cv2 = nn.Sequential(RepCSPRDW(c3 // 2, c4, n), Conv(c4, c4, 3, 1))
+        self.cv3 = nn.Sequential(RepCSPRDW(c4, c4, n), Conv(c4, c4, 3, 1))
