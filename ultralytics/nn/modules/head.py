@@ -538,5 +538,10 @@ class v11Detect(v10Detect):
 
     def __init__(self, nc=80, ch=()):
         super().__init__(nc, ch)
-        c3 = max(ch[0], min(self.nc, 100))  # channels
-        self.cv3 = nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, self.nc, 1)) for x in ch)
+        c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], min(self.nc, 100))  # channels
+        self.cv2 = nn.ModuleList(
+            nn.Sequential(Conv(x, x, 7, g=x), Conv(x, 4 * c2, 1), nn.Conv2d(4 * c2, 4 * self.reg_max, 1)) for x in ch
+        )
+        self.cv3 = nn.ModuleList(nn.Sequential(Conv(x, x, 7, g=x), Conv(x, 4 * c3, 1), nn.Conv2d(4 * c3, self.nc, 1)) for x in ch)
+        self.one2one_cv2 = copy.deepcopy(self.cv2)
+        self.one2one_cv3 = copy.deepcopy(self.cv3)
