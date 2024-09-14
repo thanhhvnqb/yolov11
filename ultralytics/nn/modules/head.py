@@ -8,7 +8,7 @@ import torch.nn as nn
 from torch.nn.init import constant_, xavier_uniform_
 
 from ultralytics.utils.tal import TORCH_1_10, dist2bbox, dist2rbox, make_anchors
-from .block import DFL, Proto, ContrastiveHead, BNContrastiveHead
+from .block import DFL, Proto, ContrastiveHead, BNContrastiveHead, RepVGGDW
 from .conv import Conv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
@@ -540,8 +540,8 @@ class v11Detect(v10Detect):
         super().__init__(nc, ch)
         c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], min(self.nc, 100))  # channels
         self.cv2 = nn.ModuleList(
-            nn.Sequential(Conv(x, x, 7, g=x), Conv(x, 4 * c2, 1), nn.Conv2d(4 * c2, 4 * self.reg_max, 1)) for x in ch
+            nn.Sequential(RepVGGDW(x), Conv(x, 4 * c2, 1), nn.Conv2d(4 * c2, 4 * self.reg_max, 1)) for x in ch
         )
-        self.cv3 = nn.ModuleList(nn.Sequential(Conv(x, x, 7, g=x), Conv(x, 4 * c3, 1), nn.Conv2d(4 * c3, self.nc, 1)) for x in ch)
+        self.cv3 = nn.ModuleList(nn.Sequential(RepVGGDW(x), Conv(x, 4 * c3, 1), nn.Conv2d(4 * c3, self.nc, 1)) for x in ch)
         self.one2one_cv2 = copy.deepcopy(self.cv2)
         self.one2one_cv3 = copy.deepcopy(self.cv3)
