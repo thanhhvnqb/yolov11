@@ -688,7 +688,7 @@ class v11Detect(v10Detect):
         self.cv2 = nn.ModuleList(
             nn.Sequential(
                 Conv(x, c2, 3),
-                RepVGGDW(c2),
+                Conv(c2, c2, 3, g=c2),
                 Conv(c2, 4 * c2, 1),
                 nn.Conv2d(4 * c2, 4 * self.reg_max, 1),
             )
