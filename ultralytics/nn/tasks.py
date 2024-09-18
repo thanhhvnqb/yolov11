@@ -52,11 +52,10 @@ from ultralytics.nn.modules import (
     C2fCIB,
     PSA,
     SCDown,
-    DWPool,
     RepVGGDW,
-    RepRDW,
-    RepCSPRDW,
-    RepNCSPELAN4RDW,
+    RepDWConv,
+    C2IFDW,
+    C2FDWIC,
     v10Detect,
     v11Detect
 )
@@ -201,7 +200,7 @@ class BaseModel(nn.Module):
                 if isinstance(m, RepConv):
                     m.fuse_convs()
                     m.forward = m.forward_fuse  # update forward
-                if isinstance(m, RepVGGDW):
+                if isinstance(m, RepVGGDW) or isinstance(m, RepDWConv):
                     m.fuse()
                     m.forward = m.forward_fuse
             self.info(verbose=verbose)
@@ -881,7 +880,6 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             C2,
             C2f,
             RepNCSPELAN4,
-            RepNCSPELAN4RDW,
             ADown,
             SPPELAN,
             C2fAttn,
@@ -894,8 +892,9 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             RepC3,
             PSA,
             SCDown,
-            DWPool,
-            C2fCIB
+            C2fCIB,
+            C2IFDW,
+            C2FDWIC,
         }:
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
@@ -907,7 +906,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 )  # num heads
 
             args = [c1, c2, *args[1:]]
-            if m in (BottleneckCSP, C1, C2, C2f, C2fAttn, C3, C3TR, C3Ghost, C3x, RepC3, C2fCIB):
+            if m in (BottleneckCSP, C1, C2, C2f, C2fAttn, C3, C3TR, C3Ghost, C3x, RepC3, C2fCIB, C2IFDW, C2FDWIC):
                 args.insert(2, n)  # number of repeats
                 n = 1
         elif m is AIFI:

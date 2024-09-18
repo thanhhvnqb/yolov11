@@ -38,9 +38,6 @@ __all__ = (
     "CBFuse",
     "CBLinear",
     "Silence",
-    "RepRDW",
-    "RepCSPRDW",
-    "RepNCSPELAN4RDW",
 )
 
 
@@ -889,69 +886,183 @@ class SCDown(nn.Module):
     def forward(self, x):
         return self.cv2(self.cv1(x))
 
+class RepDWConv(nn.Module):
+    """RepDWConv is a rep-style block, including training and deploy status
+    This code is based on RepConv (https://github.com/DingXiaoH/RepVGG/blob/main/repvgg.py)
+    """
+    default_act = nn.SiLU()  # default activation
 
-class DWPool(nn.Module):
-    # def __init__(self, c1, c2, k, s):
-    #     super().__init__()
-    #     _c = c2 // 2
-    #     self.cv1_1 = Conv(c1, c1, k=k, s=s, g=c1, act=False)
-    #     self.cv1_2 = Conv(c1, _c, 1, 1)
-    #     self.cv2_1 = Conv(c1, c1, 1, 1)
-    #     self.cv2_2 = Conv(c1, c1, k=k, s=s, g=c1, act=False)
-    #     self.cv2_3 = Conv(c1, _c, 1, 1)
-
-    # def forward(self, x):
-    #     return torch.cat((self.cv1_2(self.cv1_1(x)), self.cv2_3(self.cv2_2(self.cv2_1(x)))), 1)
-
-    def __init__(self, c1, c2, k, s):
+    def __init__(self, c, k=(3, 5), s=1, g=1, bn=False, act=True, deploy=False):
         super().__init__()
-        self.cv1_1 = Conv(c1, c1, k=k, s=s, g=c1, act=False)
-        self.cv2_1 = Conv(c1, c1, 1, 1)
-        self.cv2_2 = Conv(c1, c1, k=k, s=s, g=c1, act=False)
-        self.cv = Conv(2 * c1, c2, 1, 1)
+        self.g = g
+        self.k = k
+        self.c = c
+        self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
+
+        self.bn = nn.BatchNorm2d(num_features=c) if bn and s == 1 else None
+        self.conv = nn.ModuleList(DWConv(c, c, kn, s, act=False) for kn in k)
+
+    def forward_fuse(self, x):
+        """Forward process"""
+        return self.act(self.dwconv(x))
 
     def forward(self, x):
-        return self.cv(torch.cat((self.cv1_1(x), self.cv2_2(self.cv2_1(x))), 1))
+        """Forward process"""
+        id_out = 0 if self.bn is None else self.bn(x)
+        sum = None
+        for conv in self.conv:
+            sum = conv(x) if sum is None else sum + conv(x)
+        return self.act(sum + id_out)
+
+    def get_equivalent_kernel_bias(self):
+        kernel, bias = None, None
+        for dwconv in self.conv:
+            if kernel is None:
+                kernel, bias = self._fuse_bn_tensor(dwconv)
+                kernel = self._pad_to_max_size_tensor(kernel, max(self.k))
+            else:
+                kernel3x3, bias3x3 = self._fuse_bn_tensor(dwconv)
+                kernel += self._pad_to_max_size_tensor(kernel3x3, max(self.k))
+                bias += bias3x3
+        kernelid, biasid = self._fuse_bn_tensor(self.bn)
+        return kernel + kernelid, bias + biasid
+
+    def _pad_to_max_size_tensor(self, kernel1x1, max_size):
+        if kernel1x1 is None:
+            return 0
+        elif kernel1x1.shape[2] == max_size:
+            return kernel1x1
+        else:
+            return torch.nn.functional.pad(kernel1x1, [(max_size - kernel1x1.shape[2]) // 2, (max_size - kernel1x1.shape[2]) // 2,
+                                                       (max_size - kernel1x1.shape[3]) // 2, (max_size - kernel1x1.shape[3]) // 2])
+
+    def _fuse_bn_tensor(self, branch):
+        if branch is None:
+            return 0, 0
+        if isinstance(branch, Conv):
+            kernel = branch.conv.weight
+            running_mean = branch.bn.running_mean
+            running_var = branch.bn.running_var
+            gamma = branch.bn.weight
+            beta = branch.bn.bias
+            eps = branch.bn.eps
+        elif isinstance(branch, nn.BatchNorm2d):
+            if not hasattr(self, 'id_tensor'):
+                kernel_value = np.zeros((self.c, 1, max(self.k), max(self.k)), dtype=np.float32)
+                for i in range(self.c):
+                    kernel_value[i, 0, max(self.k) // 2, max(self.k) // 2] = 1
+                self.id_tensor = torch.from_numpy(kernel_value).to(branch.weight.device)
+            kernel = self.id_tensor
+            running_mean = branch.running_mean
+            running_var = branch.running_var
+            gamma = branch.weight
+            beta = branch.bias
+            eps = branch.eps
+        std = (running_var + eps).sqrt()
+        t = (gamma / std).reshape(-1, 1, 1, 1)
+        return kernel * t, beta - running_mean * gamma / std
+    @torch.no_grad()
+    def fuse(self):
+        if hasattr(self, 'dwconv'):
+            return
+        kernel, bias = self.get_equivalent_kernel_bias()
+        self.dwconv = nn.Conv2d(in_channels=self.conv[-1].conv.in_channels,
+                                out_channels=self.conv[-1].conv.out_channels,
+                                kernel_size=self.conv[-1].conv.kernel_size,
+                                stride=self.conv[-1].conv.stride,
+                                padding=self.conv[-1].conv.padding,
+                                dilation=self.conv[-1].conv.dilation,
+                                groups=self.conv[-1].conv.groups,
+                                bias=True).requires_grad_(False)
+        self.dwconv.weight.data = kernel
+        self.dwconv.bias.data = bias
+        for para in self.parameters():
+            para.detach_()
+        self.__delattr__("conv")
+        if hasattr(self, 'nm'):
+            self.__delattr__('nm')
+        if hasattr(self, 'bn'):
+            self.__delattr__('bn')
+        if hasattr(self, 'id_tensor'):
+            self.__delattr__('id_tensor')
 
 
-class RepDW(RepVGGDW):
-    def __init__(self, ed) -> None:
-        super().__init__(ed)
-        self.act = nn.SiLU()
+class IFDW(nn.Module):
+    """Mobile Inverted Fusion Depthwise Convolution block."""
 
-
-class RepRDW(CIB):
-    """Standard bottleneck."""
-
-    def __init__(self, c1, c2, shortcut=True, lk=True):
-        """Initializes a bottleneck module with given input/output channels, shortcut option, group, kernels, and
-        expansion.
-        """
-        super().__init__(c1, c2, shortcut, lk)
-        self.cv1 = nn.Sequential(
-            Conv(c1, c2, 1),
-            Conv(c2, c2, 7, g=c2) if not lk else RepDW(c2),
-            Conv(c2, c2, 1),
-        )
-
-
-class RepCSPRDW(RepCSP):
-    """Rep CSP with Residual Depthwise Block with 3 convolutions."""
-
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
-        """Initializes RepCSP layer with given channels, repetitions, shortcut, groups and expansion ratio."""
-        super().__init__(c1, c2, n, shortcut, g, e)
+    def __init__(self, c1, c2, shortcut=True, s=1, k=(3, 5), bn=False, e=6.0):  # ch_in, ch_out, shortcut, groups, kernels, expand
+        super().__init__()
         c_ = int(c2 * e)  # hidden channels
-        self.m = nn.Sequential(*(RepRDW(c_, c_, shortcut, g) for _ in range(n)))
+        self.cv1 = Conv(c1, c_, k=1)
+        self.dwconv = RepDWConv(c_, k=k, s=s, bn=bn)
+        self.cv2 = Conv(c_, c2, k=1)
+        self.add = shortcut and c1 == c2 and s == 1
+
+    def forward(self, x):
+        """'forward()' applies the YOLOv5 FPN to input data."""
+        return x + self.cv2(self.dwconv(self.cv1(x))) if self.add else self.cv2(self.dwconv(self.cv1(x)))
 
 
-class RepNCSPELAN4RDW(RepNCSPELAN4):
-    """CSP-ELAN with RepCSPRDW."""
+class C2IFDW(nn.Module):
+    """CSP Bottleneck with IFDW block."""
 
-    def __init__(self, c1, c2, n=1):
-        """Initializes CSP-ELAN layer with specified channel sizes, repetitions, and convolutions."""
-        c3 = c2 // 2
-        c4 = c3 // 2
-        super().__init__(c1, c2, c3, c4, n)
-        self.cv2 = nn.Sequential(RepCSPRDW(c3 // 2, c4, n), Conv(c4, c4, 3, 1))
-        self.cv3 = nn.Sequential(RepCSPRDW(c4, c4, n), Conv(c4, c4, 3, 1))
+    def __init__(self, c1, c2, n=1, shortcut=False, kmin=3, kmax=5, bn=False, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+        super().__init__()
+        k = tuple([kt for kt in range(kmin, kmax + 1, 2)])
+        self.c = int(c2 * e)  # hidden channels
+        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+        self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)
+        self.m = nn.ModuleList(IFDW(self.c, self.c, shortcut, k=k, bn=bn) for _ in range(n))
+
+    def forward(self, x):
+        """Forward pass through C2f layer."""
+        y = list(self.cv1(x).chunk(2, 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
+
+    def forward_split(self, x):
+        """Forward pass using split() instead of chunk()."""
+        y = list(self.cv1(x).split((self.c, self.c), 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
+
+class FDWIC(nn.Module):
+    """Fusion Depthwise with Inverted Convolution 1x1 block. Similar to ConvNext block."""
+
+    def __init__(self, c1, c2, shortcut=True, s=1, k=(3, 5), bn=False, e=2.0):  # ch_in, ch_out, shortcut, groups, kernels, expand
+        super().__init__()
+        c_ = int(c2 * e)  # hidden channels
+        self.cv = Conv(c1, c1, k=3)
+        # self.cv1 = Conv(c1, c_, k=1, act=False)
+        # self.dwconv = RepDWConv(c1, k=k, s=s, bn=bn)
+        self.dwconv = DWConv(c1, c1, 7, s=s, act=False)
+        self.cv2 = Conv(c1, c2, k=1, act=False)
+        self.add = shortcut and c1 == c2 and s == 1
+
+    def forward(self, x):
+        return x + self.cv2(self.dwconv(self.cv(x))) if self.add else self.cv2(self.dwconv(self.cv(x)))
+        # return x + self.cv2(self.dwconv(self.cv1(self.cv(x)))) if self.add else self.cv2(self.dwconv(self.cv1(self.cv(x))))
+
+
+class C2FDWIC(nn.Module):
+    """CSP Bottleneck with MBConvRep block."""
+
+    def __init__(self, c1, c2, n=1, shortcut=False, kmin=3, kmax=7, bn=False, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+        super().__init__()
+        k = tuple([kt for kt in range(kmin, kmax + 1, 2)])
+        self.c = int(c2 * e)  # hidden channels
+        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+        self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)
+        self.m = nn.ModuleList(FDWIC(self.c, self.c, shortcut, k=k, bn=bn) for _ in range(n))
+
+    def forward(self, x):
+        """Forward pass through C2f layer."""
+        y = list(self.cv1(x).chunk(2, 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
+
+    def forward_split(self, x):
+        """Forward pass using split() instead of chunk()."""
+        y = list(self.cv1(x).split((self.c, self.c), 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
