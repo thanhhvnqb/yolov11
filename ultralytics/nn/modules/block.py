@@ -1033,9 +1033,9 @@ class FDWIC(nn.Module):
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
         # self.cv = Conv(c1, c1, k=3)
-        self.dwconv = DWConv(c1, c1, 7, s=s, act=False)
-        # self.dwconv = RepDWConv(c1, k=k, s=s, bn=bn)
-        self.cv1 = Conv(c1, c_, k=1, act=False)
+        # self.dwconv = DWConv(c1, c1, 7, s=s)
+        self.dwconv = RepDWConv(c1, k=k, s=s, bn=bn)
+        self.cv1 = Conv(c1, c_, k=1)
         self.cv2 = Conv(c_, c2, k=1, act=False)
         self.add = shortcut and c1 == c2 and s == 1
 
