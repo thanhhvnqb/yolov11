@@ -13,8 +13,8 @@ if [ -f "./runs/detect/speed-model/$1-$imgsz/weights/best.engine" ]; then
 else
     echo "Compile model."
     rm -rf ./runs/detect/speed-model/$1-$imgsz
-    yolo detect train val=False data=coco8.yaml model=$1.yaml name=speed-model/$1-$imgsz imgsz=$imgsz batch=8 epochs=1 workers=8 device=0 pretrained=False
-    yolo export format=engine half=True simplify opset=13 workspace=16 model=./runs/detect/speed-model/$1-$imgsz/weights/best.pt
+    yolo detect train val=False data=coco128.yaml model=$1.yaml name=speed-model/$1-$imgsz imgsz=$imgsz batch=8 epochs=1 workers=8 device=0 pretrained=False
+    yolo export format=engine half=True simplify workspace=16 model=./runs/detect/speed-model/$1-$imgsz/weights/best.pt
 fi
 
 echo "#####ONNX CPU#####"
