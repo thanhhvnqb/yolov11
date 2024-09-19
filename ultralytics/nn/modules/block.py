@@ -1049,7 +1049,6 @@ class C2FDWIC(nn.Module):
 
     def __init__(self, c1, c2, n=1, shortcut=False, kmin=3, kmax=7, bn=False, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__()
-        print(c1, c2, n, shortcut, kmin, kmax, bn, e)
         k = tuple([kt for kt in range(kmin, kmax + 1, 2)])
         # self.c = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c2, 1, 1) if c1 != c2 else nn.Identity()
